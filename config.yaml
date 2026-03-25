@@ -1,0 +1,47 @@
+# 基于多源数据融合的网络攻击检测系统 - 全局配置
+
+data:
+  raw_dir: "data/raw"
+  processed_dir: "data/processed"
+  threat_intel_dir: "data/threat_intel"
+  test_size: 0.1
+  val_size: 0.1
+  random_seed: 42
+  batch_size: 256
+  num_workers: 0
+  file_pattern: "cic_ids_2018_sampled.csv"
+
+model:
+  d_model: 128
+  nhead: 8
+  num_layers: 4
+  dim_feedforward: 256
+  dropout: 0.1
+  num_classes: null  # 根据数据集自动确定
+
+training:
+  epochs: 20
+  learning_rate: 0.001
+  weight_decay: 0.01
+  patience: 10  # early stopping
+  checkpoint_dir: "checkpoints"
+  log_dir: "logs"
+
+fusion:
+  strategy: "weighted_average"  # weighted_average / dempster_shafer / soft_voting
+  alpha: 0.8  # DL模型权重（仅weighted_average模式）
+
+threat_intel_api:
+  url: "http://127.0.0.1:5000"  # 威胁情报API地址，留空则使用本地JSON
+
+agent:
+  mode: "rule"  # rule / llm
+  llm:
+    model: "claude-sonnet-4-20250514"
+    api_key: ""  # 通过环境变量 ANTHROPIC_API_KEY 设置
+    max_tokens: 1024
+
+visualization:
+  output_dir: "results/figures"
+  dpi: 150
+  figsize: [10, 8]

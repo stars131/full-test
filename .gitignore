@@ -1,0 +1,34 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# 数据文件
+data/raw/*.csv
+data/processed/
+
+# 模型检查点
+checkpoints/
+*.pth
+
+# 结果
+results/
+logs/
+
+# 环境
+.env
+venv/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
