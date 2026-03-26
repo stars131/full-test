@@ -9,6 +9,7 @@ build/
 # 数据文件
 data/raw/*.csv
 data/processed/
+data/数据集BCCC-CSE-CIC-IDS-2018/
 
 # 模型检查点
 checkpoints/
@@ -17,6 +18,7 @@ checkpoints/
 # 结果
 results/
 logs/
+/root/autodl-tmp/
 
 # 环境
 .env
