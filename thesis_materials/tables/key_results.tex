@@ -1,0 +1,19 @@
+\begin{table}[H]
+\centering
+\caption{关键实验结果对比}
+\label{tab:keyresults}
+\begin{tabular}{p{3.5cm}cccccc}
+\toprule
+实验 & DL Acc & DL Bal.Acc & DL Macro-F1 & Fused Acc & Fused Bal.Acc & Fused Macro-F1 \\
+\midrule
+exp01 baseline cross attention & 0.9653 & 0.6310 & 0.6544 & 0.9653 & 0.6310 & 0.6545 \\
+exp04 weighted sampler & 0.8994 & 0.8404 & 0.5463 & 0.8994 & 0.8404 & 0.5463 \\
+exp05 concat & 0.9653 & 0.7025 & 0.7478 & 0.9653 & 0.7025 & 0.7478 \\
+exp06 traffic only & 0.9648 & 0.5916 & 0.6318 & 0.9648 & 0.5916 & 0.6317 \\
+exp08 log only & 0.9422 & 0.5458 & 0.5977 & 0.9422 & 0.5458 & 0.5977 \\
+exp09 concat + synth intel + WA(0.7) & 0.9653 & 0.7025 & 0.7478 & 0.9653 & 0.7025 & 0.7478 \\
+exp10 concat + synth intel + soft voting & 0.9653 & 0.7025 & 0.7478 & 0.9994 & 0.7738 & 0.7980 \\
+exp11 weighted sampler + synth intel & 0.8994 & 0.8404 & 0.5463 & 0.8995 & 0.8881 & 0.5523 \\
+\bottomrule
+\end{tabular}
+\end{table}
