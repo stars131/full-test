@@ -1,26 +1,51 @@
 """评估入口 - 加载模型，在测试集上全面评估"""
 
-import os
 import argparse
+import os
+from contextlib import nullcontext
 
-import yaml
 import numpy as np
-import pandas as pd
 import torch
+import yaml
 
-from src.data.data_loader import DataLoader
-from src.data.feature_engineer import FeatureEngineer
-from src.data.preprocessor import Preprocessor
-from src.models.transformer_detector import TransformerDetector
-from src.models.threat_intel import ThreatIntelScorer
+from src.data.cache import load_or_prepare_datasets
 from src.models.decision_fusion import DecisionFusion
-from src.utils.metrics import evaluate_metrics, print_classification_report, get_confusion_matrix
+from src.models.threat_intel import ThreatIntelScorer
+from src.models.transformer_detector import TransformerDetector
+from src.utils.experiment import save_json, save_text, save_yaml
+from src.utils.metrics import (
+    evaluate_metrics,
+    get_classification_report_dict,
+    get_confusion_matrix,
+    print_classification_report,
+)
 from src.utils.visualization import Visualizer
+
+
+def build_autocast_context(runtime_config: dict, device: torch.device):
+    if device.type != "cuda":
+        return nullcontext
+
+    precision = runtime_config.get("precision", "fp32").lower()
+    if precision == "bf16":
+        dtype = torch.bfloat16
+    elif precision == "fp16":
+        dtype = torch.float16
+    else:
+        return nullcontext
+
+    def autocast_context():
+        return torch.amp.autocast(
+            device_type="cuda",
+            dtype=dtype,
+            enabled=True,
+        )
+
+    return autocast_context
 
 
 def evaluate(config_path: str = "config.yaml"):
     """评估主流程"""
-
     with open(config_path, "r", encoding="utf-8") as f:
         config = yaml.safe_load(f)
 
@@ -28,63 +53,60 @@ def evaluate(config_path: str = "config.yaml"):
     train_config = config["training"]
     fusion_config = config["fusion"]
     vis_config = config.get("visualization", {})
+    runtime_config = config.get("runtime", {})
+    experiment_config = config.get("experiment", {})
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"使用设备: {device}")
+    autocast_context = build_autocast_context(runtime_config, device)
+    pin_memory = data_config.get("pin_memory", device.type == "cuda")
+    non_blocking = pin_memory and device.type == "cuda"
 
     # ===== 加载数据 =====
     print("\n加载数据...")
-    loader = DataLoader(data_config["raw_dir"])
-    data = loader.load(data_config.get("file_pattern", "*.csv"))
-
-    engineer = FeatureEngineer()
-    engineer.fit(data)
-    traffic_features, log_features = engineer.transform(data)
-    traffic_dim, log_dim = engineer.get_feature_dims()
-    labels = data[loader.label_col].values
-
-    # 保留IP信息用于威胁情报查询
-    network_info = {}
-    if "src_ip" in data.columns:
-        network_info["src_ip"] = data["src_ip"].values
-    if "dst_ip" in data.columns:
-        network_info["dst_ip"] = data["dst_ip"].values
-    if "dst_port" in data.columns:
-        network_info["dst_port"] = pd.to_numeric(
-            data["dst_port"], errors="coerce"
-        ).fillna(0).astype(int).values
-
-    preprocessor = Preprocessor()
-    datasets = preprocessor.fit_transform(
-        traffic_features, log_features, labels,
-        test_size=data_config.get("test_size", 0.1),
-        val_size=data_config.get("val_size", 0.1),
-        random_seed=data_config.get("random_seed", 42),
+    datasets, preprocessor, dataset_metadata = load_or_prepare_datasets(
+        data_config
     )
+    network_info = dataset_metadata.get("network_info", {})
     dataloaders = preprocessor.create_dataloaders(
         datasets,
         batch_size=data_config.get("batch_size", 256),
         num_workers=data_config.get("num_workers", 0),
+        pin_memory=pin_memory,
+        persistent_workers=data_config.get("persistent_workers", False),
+        prefetch_factor=data_config.get("prefetch_factor", 2),
+        use_weighted_sampler=False,
     )
 
     # ===== 加载模型 =====
     print("\n加载模型...")
-    checkpoint_dir = train_config.get("checkpoint_dir", "checkpoints")
-    checkpoint_path = os.path.join(checkpoint_dir, "best_model.pth")
-    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    checkpoint_path = os.path.join(
+        train_config.get("checkpoint_dir", "checkpoints"),
+        "best_model.pth",
+    )
+    checkpoint = torch.load(
+        checkpoint_path,
+        map_location=device,
+        weights_only=False,
+    )
 
     model = TransformerDetector(
         traffic_dim=checkpoint["traffic_dim"],
         log_dim=checkpoint["log_dim"],
         num_classes=checkpoint["num_classes"],
-        **{k: v for k, v in checkpoint["model_config"].items()
-           if k != "num_classes"},
+        **{
+            k: v
+            for k, v in checkpoint["model_config"].items()
+            if k != "num_classes"
+        },
     ).to(device)
     model.load_state_dict(checkpoint["model_state_dict"])
     model.eval()
-    print(f"模型加载自 epoch {checkpoint['epoch']}, val_acc: {checkpoint['val_acc']:.4f}")
+    print(
+        "模型加载自 epoch "
+        f"{checkpoint['epoch']}, val_acc: {checkpoint['val_acc']:.4f}"
+    )
 
-    # ===== 可视化工具 =====
     visualizer = Visualizer(
         output_dir=vis_config.get("output_dir", "results/figures"),
         dpi=vis_config.get("dpi", 150),
@@ -101,10 +123,11 @@ def evaluate(config_path: str = "config.yaml"):
 
     with torch.no_grad():
         for traffic_batch, log_batch, label_batch in dataloaders["test"]:
-            traffic_batch = traffic_batch.to(device)
-            log_batch = log_batch.to(device)
+            traffic_batch = traffic_batch.to(device, non_blocking=non_blocking)
+            log_batch = log_batch.to(device, non_blocking=non_blocking)
 
-            probs = model.predict_proba(traffic_batch, log_batch)
+            with autocast_context():
+                probs = model.predict_proba(traffic_batch, log_batch)
             preds = probs.argmax(dim=1).cpu().numpy()
             all_preds.append(preds)
             all_labels.append(label_batch.numpy())
@@ -113,16 +136,23 @@ def evaluate(config_path: str = "config.yaml"):
     y_pred_dl = np.concatenate(all_preds)
 
     dl_metrics = evaluate_metrics(y_true, y_pred_dl, preprocessor.class_names)
-    print(f"\n仅DL模型指标:")
-    for k, v in dl_metrics.items():
-        print(f"  {k}: {v:.4f}")
+    print("\n仅DL模型指标:")
+    for key, value in dl_metrics.items():
+        print(f"  {key}: {value:.4f}")
 
     print("\n分类报告:")
-    print_classification_report(y_true, y_pred_dl, preprocessor.class_names)
+    dl_report_text = print_classification_report(
+        y_true, y_pred_dl, preprocessor.class_names
+    )
+    dl_report_dict = get_classification_report_dict(
+        y_true, y_pred_dl, preprocessor.class_names
+    )
 
     cm = get_confusion_matrix(y_true, y_pred_dl)
     visualizer.plot_confusion_matrix(
-        cm, preprocessor.class_names, save_name="confusion_matrix_dl.png"
+        cm,
+        preprocessor.class_names,
+        save_name="confusion_matrix_dl.png",
     )
 
     # ===== 评估2: DL + 威胁情报融合 =====
@@ -135,38 +165,50 @@ def evaluate(config_path: str = "config.yaml"):
         preprocessor.class_names,
         api_url=config.get("threat_intel_api", {}).get("url"),
     )
-
     decision_fusion = DecisionFusion(
         strategy=fusion_config.get("strategy", "weighted_average"),
         alpha=fusion_config.get("alpha", 0.8),
     )
 
-    # 获取测试集对应的IP信息用于威胁情报查询
     test_indices = preprocessor.test_indices
-    test_src_ips = network_info.get("src_ip", np.array([]))[test_indices] if "src_ip" in network_info else None
-    test_dst_ips = network_info.get("dst_ip", np.array([]))[test_indices] if "dst_ip" in network_info else None
-    test_dst_ports = network_info.get("dst_port", np.array([]))[test_indices] if "dst_port" in network_info else None
+    test_src_ips = (
+        np.array(network_info.get("src_ip", []), dtype=object)[test_indices]
+        if "src_ip" in network_info
+        else None
+    )
+    test_dst_ips = (
+        np.array(network_info.get("dst_ip", []), dtype=object)[test_indices]
+        if "dst_ip" in network_info
+        else None
+    )
+    test_dst_ports = (
+        np.array(network_info.get("dst_port", []), dtype=np.int64)[test_indices]
+        if "dst_port" in network_info
+        else None
+    )
 
     all_fused_preds = []
-    all_dl_probs = []
     sample_idx = 0
 
     with torch.no_grad():
-        for traffic_batch, log_batch, label_batch in dataloaders["test"]:
-            traffic_batch = traffic_batch.to(device)
-            log_batch = log_batch.to(device)
+        for traffic_batch, log_batch, _ in dataloaders["test"]:
+            traffic_batch = traffic_batch.to(device, non_blocking=non_blocking)
+            log_batch = log_batch.to(device, non_blocking=non_blocking)
 
-            probs = model.predict_proba(traffic_batch, log_batch)
+            with autocast_context():
+                probs = model.predict_proba(traffic_batch, log_batch)
             probs_np = probs.cpu().numpy()
-            all_dl_probs.append(probs_np)
 
             batch_size = probs_np.shape[0]
             ti_scores = np.zeros_like(probs_np)
-
             for i in range(batch_size):
                 src = test_src_ips[sample_idx] if test_src_ips is not None else None
                 dst = test_dst_ips[sample_idx] if test_dst_ips is not None else None
-                port = int(test_dst_ports[sample_idx]) if test_dst_ports is not None else None
+                port = (
+                    int(test_dst_ports[sample_idx])
+                    if test_dst_ports is not None
+                    else None
+                )
                 ti_scores[i] = threat_scorer.score(src, dst, port)
                 sample_idx += 1
 
@@ -174,20 +216,25 @@ def evaluate(config_path: str = "config.yaml"):
             all_fused_preds.append(fused_preds)
 
     y_pred_fused = np.concatenate(all_fused_preds)
-
     fused_metrics = evaluate_metrics(
         y_true, y_pred_fused, preprocessor.class_names
     )
-    print(f"\nDL+威胁情报融合指标:")
-    for k, v in fused_metrics.items():
-        print(f"  {k}: {v:.4f}")
+    print("\nDL+威胁情报融合指标:")
+    for key, value in fused_metrics.items():
+        print(f"  {key}: {value:.4f}")
 
     print("\n分类报告:")
-    print_classification_report(y_true, y_pred_fused, preprocessor.class_names)
+    fused_report_text = print_classification_report(
+        y_true, y_pred_fused, preprocessor.class_names
+    )
+    fused_report_dict = get_classification_report_dict(
+        y_true, y_pred_fused, preprocessor.class_names
+    )
 
     cm_fused = get_confusion_matrix(y_true, y_pred_fused)
     visualizer.plot_confusion_matrix(
-        cm_fused, preprocessor.class_names,
+        cm_fused,
+        preprocessor.class_names,
         save_name="confusion_matrix_fused.png",
     )
 
@@ -201,13 +248,64 @@ def evaluate(config_path: str = "config.yaml"):
         "DL + Threat Intel": fused_metrics,
     }
     visualizer.plot_metrics_comparison(metrics_comparison)
+    visualizer.plot_label_distribution(y_true, preprocessor.class_names)
 
-    # 标签分布
-    visualizer.plot_label_distribution(
-        y_true, preprocessor.class_names
+    artifacts_dir = experiment_config.get(
+        "artifacts_dir",
+        train_config.get("log_dir", train_config.get("checkpoint_dir", ".")),
     )
+    reports_dir = experiment_config.get("reports_dir", artifacts_dir)
+    os.makedirs(artifacts_dir, exist_ok=True)
+    os.makedirs(reports_dir, exist_ok=True)
 
-    print("\n评估完成！结果已保存至:", vis_config.get("output_dir", "results/figures"))
+    evaluation_summary = {
+        "checkpoint_path": checkpoint_path,
+        "checkpoint_epoch": checkpoint["epoch"],
+        "checkpoint_val_acc": checkpoint["val_acc"],
+        "class_names": preprocessor.class_names,
+        "threat_intel_dir": data_config.get("threat_intel_dir"),
+        "decision_fusion_strategy": fusion_config.get(
+            "strategy", "weighted_average"
+        ),
+        "decision_fusion_alpha": fusion_config.get("alpha"),
+        "dl_metrics": dl_metrics,
+        "fused_metrics": fused_metrics,
+        "threat_intel_entries": len(threat_scorer.intel_db),
+    }
+    save_json(
+        os.path.join(artifacts_dir, "evaluation_metrics.json"),
+        evaluation_summary,
+    )
+    save_json(
+        os.path.join(artifacts_dir, "classification_report_dl.json"),
+        dl_report_dict,
+    )
+    save_json(
+        os.path.join(artifacts_dir, "classification_report_fused.json"),
+        fused_report_dict,
+    )
+    save_json(
+        os.path.join(artifacts_dir, "confusion_matrix_dl.json"),
+        cm.tolist(),
+    )
+    save_json(
+        os.path.join(artifacts_dir, "confusion_matrix_fused.json"),
+        cm_fused.tolist(),
+    )
+    save_text(
+        os.path.join(reports_dir, "classification_report_dl.txt"),
+        dl_report_text,
+    )
+    save_text(
+        os.path.join(reports_dir, "classification_report_fused.txt"),
+        fused_report_text,
+    )
+    save_yaml(os.path.join(artifacts_dir, "resolved_config.yaml"), config)
+
+    print(
+        "\n评估完成！结果已保存至:",
+        vis_config.get("output_dir", "results/figures"),
+    )
 
 
 if __name__ == "__main__":
