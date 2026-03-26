@@ -2,11 +2,15 @@
 
 import os
 import pickle
-from typing import Tuple, Dict, Optional
+from typing import Dict
 
 import numpy as np
 import torch
-from torch.utils.data import Dataset, DataLoader as TorchDataLoader
+from torch.utils.data import (
+    DataLoader as TorchDataLoader,
+    Dataset,
+    WeightedRandomSampler,
+)
 from sklearn.preprocessing import StandardScaler, LabelEncoder
 from sklearn.model_selection import train_test_split
 
@@ -20,9 +24,9 @@ class NIDSDataset(Dataset):
         log_features: np.ndarray,
         labels: np.ndarray,
     ):
-        self.traffic = torch.FloatTensor(traffic_features)
-        self.log = torch.FloatTensor(log_features)
-        self.labels = torch.LongTensor(labels)
+        self.traffic = torch.as_tensor(traffic_features, dtype=torch.float32)
+        self.log = torch.as_tensor(log_features, dtype=torch.float32)
+        self.labels = torch.as_tensor(labels, dtype=torch.long)
 
     def __len__(self):
         return len(self.labels)
@@ -40,6 +44,16 @@ class Preprocessor:
         self.label_encoder = LabelEncoder()
         self.num_classes: int = 0
         self.class_names: list = []
+        self.train_indices = None
+        self.val_indices = None
+        self.test_indices = None
+        self.train_labels = None
+        self.val_labels = None
+        self.test_labels = None
+        self.train_class_counts: list[int] = []
+        self.val_class_counts: list[int] = []
+        self.test_class_counts: list[int] = []
+        self.split_sizes: Dict[str, int] = {}
 
     def fit_transform(
         self,
@@ -101,6 +115,23 @@ class Preprocessor:
         self.train_indices = idx_train
         self.val_indices = idx_val
         self.test_indices = idx_test
+        self.train_labels = y_train
+        self.val_labels = y_val
+        self.test_labels = y_test
+        self.train_class_counts = np.bincount(
+            y_train, minlength=self.num_classes
+        ).tolist()
+        self.val_class_counts = np.bincount(
+            y_val, minlength=self.num_classes
+        ).tolist()
+        self.test_class_counts = np.bincount(
+            y_test, minlength=self.num_classes
+        ).tolist()
+        self.split_sizes = {
+            "train": len(y_train),
+            "val": len(y_val),
+            "test": len(y_test),
+        }
 
         print(f"训练集: {len(y_train)}, 验证集: {len(y_val)}, 测试集: {len(y_test)}")
 
@@ -124,40 +155,60 @@ class Preprocessor:
         datasets: Dict[str, NIDSDataset],
         batch_size: int = 256,
         num_workers: int = 0,
+        pin_memory: bool = False,
+        persistent_workers: bool = False,
+        prefetch_factor: int = 2,
+        use_weighted_sampler: bool = False,
     ) -> Dict[str, TorchDataLoader]:
         """创建PyTorch DataLoader"""
+        train_sampler = None
+        shuffle = True
+
+        if use_weighted_sampler:
+            class_counts = np.array(self.train_class_counts, dtype=np.float64)
+            class_counts = np.where(class_counts == 0, 1.0, class_counts)
+            class_weights = 1.0 / class_counts
+            sample_weights = class_weights[self.train_labels]
+            train_sampler = WeightedRandomSampler(
+                weights=torch.DoubleTensor(sample_weights),
+                num_samples=len(sample_weights),
+                replacement=True,
+            )
+            shuffle = False
+
+        common_loader_kwargs = {
+            "batch_size": batch_size,
+            "num_workers": num_workers,
+            "pin_memory": pin_memory,
+        }
+        if num_workers > 0:
+            common_loader_kwargs["persistent_workers"] = persistent_workers
+            common_loader_kwargs["prefetch_factor"] = prefetch_factor
+
         return {
             "train": TorchDataLoader(
                 datasets["train"],
-                batch_size=batch_size,
-                shuffle=True,
-                num_workers=num_workers,
+                shuffle=shuffle,
+                sampler=train_sampler,
                 drop_last=False,
+                **common_loader_kwargs,
             ),
             "val": TorchDataLoader(
                 datasets["val"],
-                batch_size=batch_size,
                 shuffle=False,
-                num_workers=num_workers,
+                **common_loader_kwargs,
             ),
             "test": TorchDataLoader(
                 datasets["test"],
-                batch_size=batch_size,
                 shuffle=False,
-                num_workers=num_workers,
+                **common_loader_kwargs,
             ),
         }
 
     def save(self, path: str):
         """保存预处理器状态"""
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        state = {
-            "traffic_scaler": self.traffic_scaler,
-            "log_scaler": self.log_scaler,
-            "label_encoder": self.label_encoder,
-            "num_classes": self.num_classes,
-            "class_names": self.class_names,
-        }
+        state = self.get_state()
         with open(path, "wb") as f:
             pickle.dump(state, f)
 
@@ -165,11 +216,45 @@ class Preprocessor:
         """加载预处理器状态"""
         with open(path, "rb") as f:
             state = pickle.load(f)
+        self.load_state(state)
+
+    def get_state(self) -> dict:
+        """导出预处理器状态"""
+        return {
+            "traffic_scaler": self.traffic_scaler,
+            "log_scaler": self.log_scaler,
+            "label_encoder": self.label_encoder,
+            "num_classes": self.num_classes,
+            "class_names": self.class_names,
+            "train_indices": self.train_indices,
+            "val_indices": self.val_indices,
+            "test_indices": self.test_indices,
+            "train_labels": self.train_labels,
+            "val_labels": self.val_labels,
+            "test_labels": self.test_labels,
+            "train_class_counts": self.train_class_counts,
+            "val_class_counts": self.val_class_counts,
+            "test_class_counts": self.test_class_counts,
+            "split_sizes": self.split_sizes,
+        }
+
+    def load_state(self, state: dict):
+        """从字典加载预处理器状态"""
         self.traffic_scaler = state["traffic_scaler"]
         self.log_scaler = state["log_scaler"]
         self.label_encoder = state["label_encoder"]
         self.num_classes = state["num_classes"]
         self.class_names = state["class_names"]
+        self.train_indices = state.get("train_indices")
+        self.val_indices = state.get("val_indices")
+        self.test_indices = state.get("test_indices")
+        self.train_labels = state.get("train_labels")
+        self.val_labels = state.get("val_labels")
+        self.test_labels = state.get("test_labels")
+        self.train_class_counts = state.get("train_class_counts", [])
+        self.val_class_counts = state.get("val_class_counts", [])
+        self.test_class_counts = state.get("test_class_counts", [])
+        self.split_sizes = state.get("split_sizes", {})
 
     def inverse_label(self, encoded: np.ndarray) -> np.ndarray:
         """将编码后的标签还原"""
