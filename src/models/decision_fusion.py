@@ -9,6 +9,7 @@ class DecisionFusion:
 
     支持三种融合策略：
     - weighted_average: 加权平均法
+    - adaptive_weighted_average: 根据信息量自适应调整权重
     - dempster_shafer: Dempster-Shafer证据理论
     - soft_voting: 软投票法
     """
@@ -19,7 +20,12 @@ class DecisionFusion:
             strategy: 融合策略
             alpha: DL模型预测的权重（仅weighted_average使用）
         """
-        if strategy not in ("weighted_average", "dempster_shafer", "soft_voting"):
+        if strategy not in (
+            "weighted_average",
+            "adaptive_weighted_average",
+            "dempster_shafer",
+            "soft_voting",
+        ):
             raise ValueError(f"不支持的融合策略: {strategy}")
         self.strategy = strategy
         self.alpha = alpha
@@ -40,6 +46,8 @@ class DecisionFusion:
         """
         if self.strategy == "weighted_average":
             return self._weighted_average(dl_probs, threat_scores)
+        elif self.strategy == "adaptive_weighted_average":
+            return self._adaptive_weighted_average(dl_probs, threat_scores)
         elif self.strategy == "dempster_shafer":
             return self._dempster_shafer(dl_probs, threat_scores)
         elif self.strategy == "soft_voting":
@@ -51,6 +59,27 @@ class DecisionFusion:
         """加权平均法: P_final = α * P_dl + (1-α) * P_threat"""
         fused = self.alpha * dl_probs + (1 - self.alpha) * threat_scores
         # 归一化
+        row_sums = fused.sum(axis=1, keepdims=True)
+        row_sums = np.where(row_sums == 0, 1, row_sums)
+        return fused / row_sums
+
+    def _adaptive_weighted_average(
+        self, dl_probs: np.ndarray, threat_scores: np.ndarray
+    ) -> np.ndarray:
+        """根据威胁情报分布尖锐程度自适应调整DL权重
+
+        当威胁情报接近均匀分布时，保持DL输出不被稀释；
+        当威胁情报更集中时，逐步降低DL权重，最小降至alpha。
+        """
+        num_classes = threat_scores.shape[1]
+        uniform_max = 1.0 / num_classes
+        max_scores = threat_scores.max(axis=1, keepdims=True)
+        strength = (max_scores - uniform_max) / max(1e-12, 1.0 - uniform_max)
+        strength = np.clip(strength, 0.0, 1.0)
+
+        dl_weight = 1.0 - (1.0 - self.alpha) * strength
+        fused = dl_weight * dl_probs + (1.0 - dl_weight) * threat_scores
+
         row_sums = fused.sum(axis=1, keepdims=True)
         row_sums = np.where(row_sums == 0, 1, row_sums)
         return fused / row_sums
