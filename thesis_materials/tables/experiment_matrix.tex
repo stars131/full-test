@@ -1,0 +1,22 @@
+\begin{table}[H]
+\centering
+\caption{主实验矩阵设计}
+\label{tab:matrix}
+\begin{tabular}{p{2.3cm}p{3.2cm}p{2.5cm}p{4.9cm}}
+\toprule
+实验编号 & 结构/策略 & 威胁情报设置 & 实验目的 \\
+\midrule
+exp01 & Cross-Attention & 本地基线情报库 & 多模态基线模型 \\
+exp02 & Cross-Attention + Class Weight & 本地基线情报库 & 类别加权交叉熵 \\
+exp03 & Cross-Attention + Focal Loss & 本地基线情报库 & Focal + 类别权重 \\
+exp04 & Cross-Attention + WeightedSampler & 本地基线情报库 & 重采样优化 \\
+exp05 & Concat & 本地基线情报库 & 结构消融：拼接融合 \\
+exp06 & Traffic Only & 本地基线情报库 & 模态消融：仅流量 \\
+exp07 & Concat + WeightedSampler & 本地基线情报库 & 结构优化 + 重采样 \\
+exp08 & Log Only & 本地基线情报库 & 模态消融：仅日志 \\
+exp09 & Concat & Synthetic v1 + weighted average($\alpha=0.7$) & 拼接模型接入模拟威胁情报 \\
+exp10 & Concat & Synthetic v1 + soft voting & 评估软投票融合策略 \\
+exp11 & WeightedSampler & Synthetic v1 + weighted average($\alpha=0.7$) & 少数类优化 + 情报融合 \\
+\bottomrule
+\end{tabular}
+\end{table}
