@@ -117,7 +117,7 @@ class LLMAgent(BaseAgent):
     def query_threat_intel(
         self, indicators: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """查询威胁情报（本地执行）"""
+        """查询wxqb API威胁情报"""
         scores = self.threat_scorer.score(
             src_ip=indicators.get("src_ip"),
             dst_ip=indicators.get("dst_ip"),

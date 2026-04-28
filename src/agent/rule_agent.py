@@ -71,7 +71,7 @@ class RuleAgent(BaseAgent):
     def query_threat_intel(
         self, indicators: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """查询本地威胁情报JSON"""
+        """查询wxqb API威胁情报"""
         scores = self.threat_scorer.score(
             src_ip=indicators.get("src_ip"),
             dst_ip=indicators.get("dst_ip"),

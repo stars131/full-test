@@ -35,7 +35,10 @@ fusion:
   alpha: 0.8  # DL模型权重（仅weighted_average模式）
 
 threat_intel_api:
-  url: ""  # 服务器训练默认使用本地JSON fallback
+  url: "http://127.0.0.1:8000"  # wxqb API base URL；服务器部署时改为服务器地址
+  timeout_seconds: 5
+  use_search_fallback: true
+  cache_ttl_seconds: 3600
 
 agent:
   mode: "rule"  # rule / llm

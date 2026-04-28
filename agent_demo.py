@@ -38,6 +38,7 @@ def load_components(config_path: str, device: str = "cpu"):
     traffic_features, log_features = engineer.transform(data)
     traffic_dim, log_dim = engineer.get_feature_dims()
     labels = data[loader.label_col].values
+    network_indicators = loader.get_network_indicators(data)
 
     preprocessor = Preprocessor()
     datasets = preprocessor.fit_transform(
@@ -68,16 +69,33 @@ def load_components(config_path: str, device: str = "cpu"):
     model.load_state_dict(checkpoint["model_state_dict"])
 
     # 威胁情报
+    threat_api_config = config.get("threat_intel_api", {})
     threat_scorer = ThreatIntelScorer(
         data_config.get("threat_intel_dir", "data/threat_intel"),
         preprocessor.class_names,
-        api_url=config.get("threat_intel_api", {}).get("url"),
+        api_url=threat_api_config.get("url"),
+        timeout_seconds=threat_api_config.get("timeout_seconds", 5),
+        use_search_fallback=threat_api_config.get("use_search_fallback", True),
+        cache_ttl_seconds=threat_api_config.get("cache_ttl_seconds", 3600),
     )
 
-    return config, model, preprocessor, threat_scorer, datasets, engineer
+    test_indices = preprocessor.test_indices
+    test_network_indicators = {
+        "src_ips": np.array(network_indicators.get("src_ips", []), dtype=object)[test_indices]
+        if "src_ips" in network_indicators
+        else None,
+        "dst_ips": np.array(network_indicators.get("dst_ips", []), dtype=object)[test_indices]
+        if "dst_ips" in network_indicators
+        else None,
+        "dst_ports": np.array(network_indicators.get("dst_ports", []), dtype=object)[test_indices]
+        if "dst_ports" in network_indicators
+        else None,
+    }
+
+    return config, model, preprocessor, threat_scorer, datasets, engineer, test_network_indicators
 
 
-def demo_single(pipeline, datasets, preprocessor, engineer):
+def demo_single(pipeline, datasets, preprocessor, engineer, network_indicators):
     """单样本检测演示"""
     test_dataset = datasets["test"]
     n = len(test_dataset)
@@ -116,6 +134,12 @@ def demo_single(pipeline, datasets, preprocessor, engineer):
             "traffic_features": traffic.numpy(),
             "log_features": log.numpy(),
         }
+        if network_indicators.get("src_ips") is not None:
+            flow_data["src_ip"] = network_indicators["src_ips"][idx]
+        if network_indicators.get("dst_ips") is not None:
+            flow_data["dst_ip"] = network_indicators["dst_ips"][idx]
+        if network_indicators.get("dst_ports") is not None:
+            flow_data["dst_port"] = network_indicators["dst_ports"][idx]
 
         result = pipeline.process_single(flow_data)
 
@@ -127,7 +151,7 @@ def demo_single(pipeline, datasets, preprocessor, engineer):
         print(f"判定: {'正确 ✓' if correct else '错误 ✗'}")
 
 
-def demo_batch(pipeline, datasets, preprocessor, num_samples=20):
+def demo_batch(pipeline, datasets, preprocessor, network_indicators, num_samples=20):
     """批量检测演示"""
     test_dataset = datasets["test"]
     n = min(num_samples, len(test_dataset))
@@ -139,17 +163,32 @@ def demo_batch(pipeline, datasets, preprocessor, num_samples=20):
     traffic_batch = []
     log_batch = []
     true_labels = []
+    src_ips = []
+    dst_ips = []
+    dst_ports = []
 
     for idx in indices:
         traffic, log, label = test_dataset[idx]
         traffic_batch.append(traffic.numpy())
         log_batch.append(log.numpy())
         true_labels.append(label.item())
+        if network_indicators.get("src_ips") is not None:
+            src_ips.append(network_indicators["src_ips"][idx])
+        if network_indicators.get("dst_ips") is not None:
+            dst_ips.append(network_indicators["dst_ips"][idx])
+        if network_indicators.get("dst_ports") is not None:
+            dst_ports.append(network_indicators["dst_ports"][idx])
 
     traffic_batch = np.array(traffic_batch)
     log_batch = np.array(log_batch)
 
-    results = pipeline.process_batch(traffic_batch, log_batch)
+    results = pipeline.process_batch(
+        traffic_batch,
+        log_batch,
+        src_ips=src_ips or None,
+        dst_ips=dst_ips or None,
+        dst_ports=dst_ports or None,
+    )
     report = pipeline.generate_report(results)
 
     print(f"\n{'=' * 60}")
@@ -199,8 +238,15 @@ def main():
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    config, model, preprocessor, threat_scorer, datasets, engineer = \
-        load_components(args.config, device)
+    (
+        config,
+        model,
+        preprocessor,
+        threat_scorer,
+        datasets,
+        engineer,
+        network_indicators,
+    ) = load_components(args.config, device)
 
     # 覆盖Agent模式
     if args.mode:
@@ -217,9 +263,9 @@ def main():
     )
 
     if args.batch:
-        demo_batch(pipeline, datasets, preprocessor, args.num_samples)
+        demo_batch(pipeline, datasets, preprocessor, network_indicators, args.num_samples)
     else:
-        demo_single(pipeline, datasets, preprocessor, engineer)
+        demo_single(pipeline, datasets, preprocessor, engineer, network_indicators)
 
 
 if __name__ == "__main__":

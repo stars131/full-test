@@ -160,10 +160,14 @@ def evaluate(config_path: str = "config.yaml"):
     print("评估2: DL + 威胁情报融合")
     print("=" * 50)
 
+    threat_api_config = config.get("threat_intel_api", {})
     threat_scorer = ThreatIntelScorer(
         data_config.get("threat_intel_dir", "data/threat_intel"),
         preprocessor.class_names,
-        api_url=config.get("threat_intel_api", {}).get("url"),
+        api_url=threat_api_config.get("url"),
+        timeout_seconds=threat_api_config.get("timeout_seconds", 5),
+        use_search_fallback=threat_api_config.get("use_search_fallback", True),
+        cache_ttl_seconds=threat_api_config.get("cache_ttl_seconds", 3600),
     )
     decision_fusion = DecisionFusion(
         strategy=fusion_config.get("strategy", "weighted_average"),
@@ -263,14 +267,14 @@ def evaluate(config_path: str = "config.yaml"):
         "checkpoint_epoch": checkpoint["epoch"],
         "checkpoint_val_acc": checkpoint["val_acc"],
         "class_names": preprocessor.class_names,
-        "threat_intel_dir": data_config.get("threat_intel_dir"),
+        "threat_intel_api": threat_scorer.get_diagnostics(),
         "decision_fusion_strategy": fusion_config.get(
             "strategy", "weighted_average"
         ),
         "decision_fusion_alpha": fusion_config.get("alpha"),
         "dl_metrics": dl_metrics,
         "fused_metrics": fused_metrics,
-        "threat_intel_entries": len(threat_scorer.intel_db),
+        "threat_intel_entries": 0,
     }
     save_json(
         os.path.join(artifacts_dir, "evaluation_metrics.json"),

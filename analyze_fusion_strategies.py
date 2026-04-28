@@ -86,7 +86,6 @@ def get_strategy_specs(alpha_grid: list[float]) -> list[dict]:
 def collect_predictions(
     config: dict,
     source_experiment_dir: str,
-    threat_intel_dir: str,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict]:
     data_config = dict(config["data"])
     runtime_config = config.get("runtime", {})
@@ -148,10 +147,14 @@ def collect_predictions(
         else None
     )
 
+    threat_api_config = config.get("threat_intel_api", {})
     threat_scorer = ThreatIntelScorer(
-        threat_intel_dir,
+        data_config.get("threat_intel_dir", "data/threat_intel"),
         preprocessor.class_names,
-        api_url=config.get("threat_intel_api", {}).get("url"),
+        api_url=threat_api_config.get("url"),
+        timeout_seconds=threat_api_config.get("timeout_seconds", 5),
+        use_search_fallback=threat_api_config.get("use_search_fallback", True),
+        cache_ttl_seconds=threat_api_config.get("cache_ttl_seconds", 3600),
     )
 
     all_probs = []
@@ -191,7 +194,8 @@ def collect_predictions(
         "checkpoint_path": checkpoint_path,
         "checkpoint_epoch": checkpoint["epoch"],
         "checkpoint_val_acc": checkpoint["val_acc"],
-        "threat_intel_entries": len(threat_scorer.intel_db),
+        "threat_intel_api": threat_scorer.get_diagnostics(),
+        "threat_intel_entries": 0,
     }
 
 
@@ -239,18 +243,21 @@ def build_match_summary(
 
 def run_study(
     source_experiment_dir: str,
-    threat_intel_dir: str,
     output_dir: str,
     alpha_grid: list[float],
+    threat_intel_api_url: str | None = None,
 ):
     os.makedirs(output_dir, exist_ok=True)
     config = load_source_config(source_experiment_dir)
+    if threat_intel_api_url:
+        config.setdefault("threat_intel_api", {})["url"] = threat_intel_api_url
+
     resolved = dict(config)
     resolved.setdefault("fusion_study", {})
     resolved["fusion_study"].update(
         {
             "source_experiment_dir": os.path.abspath(source_experiment_dir),
-            "threat_intel_dir": os.path.abspath(threat_intel_dir),
+            "threat_intel_api_url": config.get("threat_intel_api", {}).get("url"),
             "output_dir": os.path.abspath(output_dir),
             "alpha_grid": alpha_grid,
             "timestamp_utc": utc_now_iso(),
@@ -261,7 +268,6 @@ def run_study(
     y_true, dl_probs, ti_scores, metadata = collect_predictions(
         config=config,
         source_experiment_dir=source_experiment_dir,
-        threat_intel_dir=threat_intel_dir,
     )
     match_summary = build_match_summary(
         y_true=y_true,
@@ -312,8 +318,8 @@ def run_study(
 
     top_lines = [
         f"source_experiment_dir: {os.path.abspath(source_experiment_dir)}",
-        f"threat_intel_dir: {os.path.abspath(threat_intel_dir)}",
-        f"threat_intel_entries: {metadata['threat_intel_entries']}",
+        f"threat_intel_api_url: {metadata['threat_intel_api'].get('api_url')}",
+        f"threat_intel_api_available: {metadata['threat_intel_api'].get('api_available')}",
         f"match_rate: {match_summary['match_rate']:.6f}",
         "",
         "Top strategies by f1_macro:",
@@ -336,9 +342,9 @@ def main():
         help="已有实验目录，例如 /root/autodl-tmp/cc-bishe-experiments/exp05_ablation_concat_no_attention",
     )
     parser.add_argument(
-        "--threat-intel-dir",
-        required=True,
-        help="威胁情报目录",
+        "--threat-intel-api-url",
+        default=None,
+        help="wxqb威胁情报API地址，例如 http://127.0.0.1:8000",
     )
     parser.add_argument(
         "--output-dir",
@@ -356,9 +362,9 @@ def main():
 
     run_study(
         source_experiment_dir=args.source_experiment_dir,
-        threat_intel_dir=args.threat_intel_dir,
         output_dir=args.output_dir,
         alpha_grid=args.alphas,
+        threat_intel_api_url=args.threat_intel_api_url,
     )
 
 

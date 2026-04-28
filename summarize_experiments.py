@@ -44,6 +44,7 @@ def collect_rows(experiments_root: str) -> list[dict]:
         config = safe_load_yaml(config_path)
         status = safe_load_json(status_path)
 
+        threat_intel_api = metrics.get("threat_intel_api", {})
         row = {
             "experiment": name,
             "fusion_strategy": config.get("model", {}).get(
@@ -60,8 +61,10 @@ def collect_rows(experiments_root: str) -> list[dict]:
             "use_weighted_sampler": config.get("imbalance", {}).get(
                 "use_weighted_sampler", False
             ),
-            "threat_intel_dir": config.get("data", {}).get("threat_intel_dir"),
-            "threat_intel_entries": metrics.get("threat_intel_entries"),
+            "threat_intel_api_url": threat_intel_api.get("api_url")
+            or config.get("threat_intel_api", {}).get("url"),
+            "threat_intel_api_available": threat_intel_api.get("api_available"),
+            "threat_intel_matches": threat_intel_api.get("matched_indicators"),
             "batch_size": config.get("data", {}).get("batch_size"),
             "num_workers": config.get("data", {}).get("num_workers"),
             "precision": config.get("runtime", {}).get("precision", "fp32"),

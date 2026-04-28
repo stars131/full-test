@@ -68,16 +68,13 @@ EXPERIMENTS = [
         },
     },
     {
-        "name": "exp09_concat_synthintel_weighted_alpha07",
+        "name": "exp09_concat_wxqb_weighted_alpha07",
         "overrides": {
             "model": {
                 "fusion_strategy": "concat",
             },
-            "data": {
-                "threat_intel_dir": (
-                    "/root/autodl-tmp/cc-bishe-threat-intel/"
-                    "synthetic_train_v1"
-                ),
+            "threat_intel_api": {
+                "url": "http://127.0.0.1:8000",
             },
             "fusion": {
                 "strategy": "weighted_average",
@@ -86,16 +83,13 @@ EXPERIMENTS = [
         },
     },
     {
-        "name": "exp10_concat_synthintel_soft_voting",
+        "name": "exp10_concat_wxqb_soft_voting",
         "overrides": {
             "model": {
                 "fusion_strategy": "concat",
             },
-            "data": {
-                "threat_intel_dir": (
-                    "/root/autodl-tmp/cc-bishe-threat-intel/"
-                    "synthetic_train_v1"
-                ),
+            "threat_intel_api": {
+                "url": "http://127.0.0.1:8000",
             },
             "fusion": {
                 "strategy": "soft_voting",
@@ -104,17 +98,14 @@ EXPERIMENTS = [
         },
     },
     {
-        "name": "exp11_weighted_sampler_synthintel_alpha07",
+        "name": "exp11_weighted_sampler_wxqb_alpha07",
         "overrides": {
             "imbalance": {
                 "use_weighted_sampler": True,
                 "loss": "cross_entropy",
             },
-            "data": {
-                "threat_intel_dir": (
-                    "/root/autodl-tmp/cc-bishe-threat-intel/"
-                    "synthetic_train_v1"
-                ),
+            "threat_intel_api": {
+                "url": "http://127.0.0.1:8000",
             },
             "fusion": {
                 "strategy": "weighted_average",

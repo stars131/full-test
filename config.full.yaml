@@ -35,7 +35,10 @@ fusion:
   alpha: 0.8
 
 threat_intel_api:
-  url: ""
+  url: "http://127.0.0.1:8000"
+  timeout_seconds: 5
+  use_search_fallback: true
+  cache_ttl_seconds: 3600
 
 agent:
   mode: "rule"
