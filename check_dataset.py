@@ -1,7 +1,4 @@
-"""数据集完整性检查脚本
-
-检查当前 BCCC-CSE-CIC-IDS-2018 数据集是子集（示例）还是全量，
-并提示缺失的文件、下载方式和下一步操作。
+"""BCCC-CSE-CIC-IDS-2018 全量数据集完整性检查脚本
 
 用法:
     python check_dataset.py
@@ -10,17 +7,16 @@
 import os
 import sys
 
-# Windows控制台使用GBK, 强制UTF-8避免中文错误
 if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     try:
         sys.stdout.reconfigure(encoding="utf-8")
     except Exception:
         pass
 
-DATASET_DIR = "data/数据集BCCC-CSE-CIC-IDS-2018"
-RAW_DIR = "data/raw"
+ZIP_DIR = "/root/autodl-tmp/cc-bishe-full/zips"
+RAW_DIR = "/root/autodl-tmp/cc-bishe-full/raw"
+DATASET_URL = "https://bccc.laps.yorku.ca/BCCC-CSE-CIC-IDS-2018/"
 
-# 期望的外层ZIP文件 -> 内部包含的攻击类别子集
 EXPECTED_ZIPS = {
     "Wednesday_14_02_2018.zip": ["benign", "BF_FTP", "BF_SSH"],
     "Thursday_15_02_2018.zip": ["benign", "DoS_Golden_Eye", "DoS_Slowloris"],
@@ -34,8 +30,6 @@ EXPECTED_ZIPS = {
     "Friday-02-03-2018.zip": ["benign", "bot"],
 }
 
-SAMPLE_CSV_NAME = "cic_ids_2018_sampled.csv"
-
 
 def human_size(num_bytes: int) -> str:
     for unit in ("B", "KB", "MB", "GB"):
@@ -45,168 +39,142 @@ def human_size(num_bytes: int) -> str:
     return f"{num_bytes:.1f}TB"
 
 
+def is_sampled_csv(file_name: str) -> bool:
+    lower_name = file_name.lower()
+    return "sample" in lower_name or "sampled" in lower_name
+
+
 def check_outer_zips():
-    """检查外层ZIP存在情况"""
-    print(f"\n[1/3] 外层ZIP检查 ({DATASET_DIR})")
+    print(f"\n[1/3] 外层ZIP检查 ({ZIP_DIR})")
     print("-" * 60)
 
-    if not os.path.exists(DATASET_DIR):
-        print(f"  目录不存在")
+    if not os.path.exists(ZIP_DIR):
+        print("  目录不存在")
         return [], list(EXPECTED_ZIPS.keys())
 
     present, missing = [], []
     for zip_name, contents in EXPECTED_ZIPS.items():
-        path = os.path.join(DATASET_DIR, zip_name)
+        path = os.path.join(ZIP_DIR, zip_name)
         if os.path.exists(path):
             size = os.path.getsize(path)
             present.append((zip_name, size))
-            print(f"  [OK]   {zip_name:<32s} {human_size(size):>10s}  "
-                  f"[{', '.join(contents)}]")
+            print(
+                f"  [OK]   {zip_name:<32s} {human_size(size):>10s}  "
+                f"[{', '.join(contents)}]"
+            )
         else:
             missing.append(zip_name)
-            print(f"  [MISS] {zip_name:<32s} {'-':>10s}  "
-                  f"[{', '.join(contents)}]")
+            print(
+                f"  [MISS] {zip_name:<32s} {'-':>10s}  "
+                f"[{', '.join(contents)}]"
+            )
     return present, missing
 
 
 def check_extracted_csvs():
-    """检查已提取CSV"""
     print(f"\n[2/3] 已提取CSV检查 ({RAW_DIR})")
     print("-" * 60)
 
     if not os.path.exists(RAW_DIR):
         print("  目录不存在")
-        return [], False
+        return [], []
 
     csv_files = sorted(f for f in os.listdir(RAW_DIR) if f.endswith(".csv"))
-    sampled_exists = SAMPLE_CSV_NAME in csv_files
-
-    raw_csvs = [f for f in csv_files if f != SAMPLE_CSV_NAME]
+    raw_csvs = [f for f in csv_files if not is_sampled_csv(f)]
+    sampled_csvs = [f for f in csv_files if is_sampled_csv(f)]
 
     if not csv_files:
         print("  (无CSV文件)")
     else:
         for f in csv_files:
             size = os.path.getsize(os.path.join(RAW_DIR, f))
-            marker = "[SAMPLED]" if f == SAMPLE_CSV_NAME else "[RAW]    "
+            marker = "[SAMPLED]" if is_sampled_csv(f) else "[RAW]    "
             print(f"  {marker} {f:<45s} {human_size(size):>10s}")
 
-    return raw_csvs, sampled_exists
+    return raw_csvs, sampled_csvs
 
 
-def classify_status(
-    n_present: int, n_total: int, n_csv: int, sampled_exists: bool
-) -> str:
-    """判断当前数据集状态"""
+def classify_status(n_present: int, n_total: int, n_csv: int, sampled_count: int) -> str:
+    if sampled_count > 0:
+        return "SAMPLED_PRESENT"
     if n_present == 0:
         return "NOT_DOWNLOADED"
     if n_present < n_total:
         return "PARTIAL_ZIP"
-    # 全量ZIP都在
     if n_csv == 0:
         return "ZIP_ONLY"
-    if n_csv < 15:
-        return "SAMPLE_EXTRACTED"
+    if n_csv < 10:
+        return "PARTIAL_EXTRACTED"
     return "FULL_EXTRACTED"
 
 
-def print_download_instructions():
-    print()
-    print("下载 BCCC-CSE-CIC-IDS-2018 数据集:")
-    print()
-    print("  方法1 - 官方CIC站点 (原始PCAP):")
-    print("    https://www.unb.ca/cic/datasets/ids-2018.html")
-    print()
-    print("  方法2 - BCCC 重处理版本 (本项目使用, 推荐):")
-    print("    https://www.unb.ca/cic/datasets/")
-    print("    查找 BCCC-CSE-CIC-IDS-2018 即可")
-    print()
-    print("  方法3 - 使用AWS CLI (CIC官方提供的S3镜像):")
-    print("    aws s3 sync --no-sign-request \\")
-    print("      s3://cse-cic-ids2018/Processed-Traffic-Data-for-ML-Algorithms/ \\")
-    print("      ./data/")
-    print()
-    print(f"  下载完成后，将所有ZIP文件放到: {DATASET_DIR}/")
-
-
-def print_next_steps(status: str, missing: list, sampled_exists: bool):
+def print_next_steps(status: str, missing: list[str], sampled_csvs: list[str]) -> None:
     print()
     print("=" * 60)
     print("下一步操作建议")
     print("=" * 60)
 
+    if status == "SAMPLED_PRESENT":
+        print("\n[状态] 检测到采样CSV，默认全量训练不会使用这些文件。")
+        for name in sampled_csvs:
+            print(f"  - {name}")
+        print("请确认 raw 目录中同时存在全量CSV，然后运行: python train.py")
+        return
+
     if status == "NOT_DOWNLOADED":
         print("\n[状态] 尚未下载数据集")
-        print_download_instructions()
+        print(f"下载源: {DATASET_URL}")
+        print("执行: python prepare_data.py --download")
         return
 
     if status == "PARTIAL_ZIP":
         print(f"\n[状态] 部分ZIP缺失 ({len(missing)} 个):")
         for z in missing:
             print(f"  - {z}")
-        print_download_instructions()
-        print("\n可以使用现有部分ZIP进行测试:")
-        print("  python prepare_data.py           # 提取代表性子集")
+        print("补齐并处理: python prepare_data.py --download")
         return
 
     if status == "ZIP_ONLY":
-        print("\n[状态] 全量ZIP已就绪, 尚未提取CSV")
-        print()
-        print("选项A - 提取代表性子集 (快速测试, 约5分钟):")
-        print("  python prepare_data.py")
-        print()
-        print("选项B - 提取全量数据集 (完整实验, 约需100GB磁盘空间):")
-        print("  python prepare_data.py --full")
+        print("\n[状态] 全量ZIP已就绪，尚未提取CSV")
+        print("执行: python prepare_data.py --no-download")
         return
 
-    if status == "SAMPLE_EXTRACTED":
-        print("\n[状态] 已提取代表性子集CSV")
-        if not sampled_exists:
-            print("\n生成训练采样数据:")
-            print("  python sample_data.py")
-        else:
-            print(f"  采样数据: {SAMPLE_CSV_NAME}")
-        print()
-        print("如需完整实验, 提取全量数据:")
-        print("  python prepare_data.py --full")
+    if status == "PARTIAL_EXTRACTED":
+        print("\n[状态] CSV数量偏少，可能只提取了部分数据")
+        print("重新处理全量数据: python prepare_data.py --download")
         return
 
     if status == "FULL_EXTRACTED":
         print("\n[状态] 全量数据集已提取")
-        if not sampled_exists:
-            print("\n生成训练采样数据 (从全量采样):")
-            print("  python sample_data.py --full-source")
-        else:
-            print(f"  采样数据: {SAMPLE_CSV_NAME}")
+        print("开始训练: python train.py")
 
 
 def main():
     print("=" * 60)
-    print("BCCC-CSE-CIC-IDS-2018 数据集完整性检查")
+    print("BCCC-CSE-CIC-IDS-2018 全量数据集完整性检查")
     print("=" * 60)
 
     present, missing = check_outer_zips()
-    raw_csvs, sampled_exists = check_extracted_csvs()
+    raw_csvs, sampled_csvs = check_extracted_csvs()
 
     status = classify_status(
         n_present=len(present),
         n_total=len(EXPECTED_ZIPS),
         n_csv=len(raw_csvs),
-        sampled_exists=sampled_exists,
+        sampled_count=len(sampled_csvs),
     )
 
     print(f"\n[3/3] 状态汇总")
     print("-" * 60)
     print(f"  外层ZIP:    {len(present)}/{len(EXPECTED_ZIPS)}")
-    print(f"  已提取CSV:  {len(raw_csvs)}")
-    print(f"  采样数据:   {'存在' if sampled_exists else '未生成'}")
+    print(f"  全量CSV:    {len(raw_csvs)}")
+    print(f"  采样CSV:    {len(sampled_csvs)}")
     print(f"  整体状态:   {status}")
 
-    print_next_steps(status, missing, sampled_exists)
+    print_next_steps(status, missing, sampled_csvs)
     print()
 
-    # 以状态码返回（方便在脚本中判断）
-    return 0 if status in ("SAMPLE_EXTRACTED", "FULL_EXTRACTED") else 1
+    return 0 if status == "FULL_EXTRACTED" else 1
 
 
 if __name__ == "__main__":

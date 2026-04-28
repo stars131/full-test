@@ -16,16 +16,58 @@ def _cache_path(cache_dir: str) -> str:
     return os.path.join(cache_dir, "dataset_cache.pt")
 
 
-def _build_payload(
-    raw_dir: str,
-    file_pattern: str,
-    processed_dir: str,
-    test_size: float,
-    val_size: float,
-    random_seed: int,
-) -> tuple[dict, DataLoader]:
-    loader = DataLoader(raw_dir)
-    data = loader.load(file_pattern)
+def _file_metadata(paths: list[str]) -> list[dict]:
+    return [
+        {
+            "path": os.path.abspath(path),
+            "name": os.path.basename(path),
+            "size": os.path.getsize(path),
+            "mtime": os.path.getmtime(path),
+        }
+        for path in paths
+    ]
+
+
+def _build_cache_metadata(data_config: dict, csv_files: list[str]) -> dict:
+    return {
+        "raw_dir": os.path.abspath(data_config["raw_dir"]),
+        "file_pattern": data_config.get("file_pattern", "*.csv"),
+        "full_dataset": bool(data_config.get("full_dataset", False)),
+        "exclude_patterns": data_config.get("exclude_patterns", []),
+        "test_size": data_config.get("test_size", 0.1),
+        "val_size": data_config.get("val_size", 0.1),
+        "random_seed": data_config.get("random_seed", 42),
+        "files": _file_metadata(csv_files),
+    }
+
+
+def _current_cache_metadata(data_config: dict) -> dict:
+    loader = DataLoader(
+        data_config["raw_dir"],
+        full_dataset=data_config.get("full_dataset", False),
+        exclude_patterns=data_config.get("exclude_patterns", []),
+    )
+    csv_files = loader.list_csv_files(data_config.get("file_pattern", "*.csv"))
+    if not csv_files:
+        raise FileNotFoundError(
+            f"在 {data_config['raw_dir']} 中未找到匹配 "
+            f"'{data_config.get('file_pattern', '*.csv')}' 的CSV文件。"
+            "请先运行: python prepare_data.py --download"
+        )
+    return _build_cache_metadata(data_config, csv_files)
+
+
+def _cache_matches(payload: dict, expected_metadata: dict) -> bool:
+    return payload.get("cache_metadata") == expected_metadata
+
+
+def _build_payload(data_config: dict) -> tuple[dict, DataLoader]:
+    loader = DataLoader(
+        data_config["raw_dir"],
+        full_dataset=data_config.get("full_dataset", False),
+        exclude_patterns=data_config.get("exclude_patterns", []),
+    )
+    data = loader.load(data_config.get("file_pattern", "*.csv"))
 
     engineer = FeatureEngineer()
     engineer.fit(data)
@@ -37,15 +79,16 @@ def _build_payload(
         traffic_features,
         log_features,
         labels,
-        test_size=test_size,
-        val_size=val_size,
-        random_seed=random_seed,
+        test_size=data_config.get("test_size", 0.1),
+        val_size=data_config.get("val_size", 0.1),
+        random_seed=data_config.get("random_seed", 42),
     )
 
-    os.makedirs(processed_dir, exist_ok=True)
-    preprocessor.save(os.path.join(processed_dir, "preprocessor.pkl"))
+    os.makedirs(data_config["processed_dir"], exist_ok=True)
+    preprocessor.save(os.path.join(data_config["processed_dir"], "preprocessor.pkl"))
 
     payload = {
+        "cache_metadata": _build_cache_metadata(data_config, loader.loaded_files),
         "preprocessor_state": preprocessor.get_state(),
         "traffic_dim": traffic_features.shape[1],
         "log_dim": log_features.shape[1],
@@ -79,19 +122,21 @@ def load_or_prepare_datasets(data_config: dict) -> tuple[dict, Preprocessor, dic
     """加载或构建缓存后的数据集"""
     cache_dir = data_config.get("cache_dir")
     cache_path = _cache_path(cache_dir) if cache_dir else None
+    expected_metadata = None
 
     if cache_path and os.path.exists(cache_path):
+        expected_metadata = _current_cache_metadata(data_config)
         payload = torch.load(cache_path, map_location="cpu", weights_only=False)
-        print(f"加载缓存数据集: {cache_path}")
+        if _cache_matches(payload, expected_metadata):
+            print(f"加载缓存数据集: {cache_path}")
+        else:
+            print("缓存元数据与当前配置或CSV文件不一致，将重建缓存")
+            payload, _ = _build_payload(data_config)
+            os.makedirs(cache_dir, exist_ok=True)
+            torch.save(payload, cache_path)
+            print(f"缓存数据集已更新: {cache_path}")
     else:
-        payload, _ = _build_payload(
-            raw_dir=data_config["raw_dir"],
-            file_pattern=data_config.get("file_pattern", "*.csv"),
-            processed_dir=data_config["processed_dir"],
-            test_size=data_config.get("test_size", 0.1),
-            val_size=data_config.get("val_size", 0.1),
-            random_seed=data_config.get("random_seed", 42),
-        )
+        payload, _ = _build_payload(data_config)
         if cache_path:
             os.makedirs(cache_dir, exist_ok=True)
             torch.save(payload, cache_path)
@@ -113,5 +158,6 @@ def load_or_prepare_datasets(data_config: dict) -> tuple[dict, Preprocessor, dic
         "log_dim": payload["log_dim"],
         "label_distribution": payload["label_distribution"],
         "network_info": payload.get("network_info", {}),
+        "cache_metadata": payload.get("cache_metadata", expected_metadata),
     }
     return datasets, preprocessor, metadata

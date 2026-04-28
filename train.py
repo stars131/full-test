@@ -121,6 +121,10 @@ def train(config_path: str = "config.yaml"):
     print("\n" + "=" * 50)
     print("Step 1: 加载数据")
     print("=" * 50)
+    if data_config.get("full_dataset", False):
+        print("全量数据训练模式: BCCC-CSE-CIC-IDS-2018")
+        print(f"原始CSV目录: {data_config['raw_dir']}")
+        print("如目录为空，请先运行: python prepare_data.py --download")
 
     datasets, preprocessor, dataset_metadata = load_or_prepare_datasets(
         data_config

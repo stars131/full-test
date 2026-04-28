@@ -1,15 +1,18 @@
-# 全量训练/测试配置（使用现有原始CSV，不包含 sampled 演示文件）
+# BCCC-CSE-CIC-IDS-2018 全量训练配置（与默认 config.yaml 保持一致）
 
 data:
   raw_dir: "/root/autodl-tmp/cc-bishe-full/raw"
   processed_dir: "/root/autodl-tmp/cc-bishe-full/processed"
-  threat_intel_dir: "/root/bishe/cc-bishe/data/threat_intel"
+  cache_dir: "/root/autodl-tmp/cc-bishe-full/cache"
+  threat_intel_dir: "data/threat_intel"
   test_size: 0.1
   val_size: 0.1
   random_seed: 42
   batch_size: 8192
   num_workers: 0
   file_pattern: "*.csv"
+  full_dataset: true
+  exclude_patterns: ["*sample*", "*sampled*"]
 
 model:
   d_model: 128

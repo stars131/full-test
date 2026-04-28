@@ -1,15 +1,18 @@
-# 基于多源数据融合的网络攻击检测系统 - 全局配置
+# 基于多源数据融合的网络攻击检测系统 - 全量训练默认配置
 
 data:
-  raw_dir: "data/raw"
-  processed_dir: "data/processed"
+  raw_dir: "/root/autodl-tmp/cc-bishe-full/raw"
+  processed_dir: "/root/autodl-tmp/cc-bishe-full/processed"
+  cache_dir: "/root/autodl-tmp/cc-bishe-full/cache"
   threat_intel_dir: "data/threat_intel"
   test_size: 0.1
   val_size: 0.1
   random_seed: 42
-  batch_size: 256
+  batch_size: 8192
   num_workers: 0
-  file_pattern: "cic_ids_2018_sampled.csv"
+  file_pattern: "*.csv"
+  full_dataset: true
+  exclude_patterns: ["*sample*", "*sampled*"]
 
 model:
   d_model: 128
@@ -24,18 +27,15 @@ training:
   learning_rate: 0.001
   weight_decay: 0.01
   patience: 10  # early stopping
-  checkpoint_dir: "checkpoints"
-  log_dir: "logs"
+  checkpoint_dir: "/root/autodl-tmp/cc-bishe-full/checkpoints"
+  log_dir: "/root/autodl-tmp/cc-bishe-full/logs"
 
 fusion:
   strategy: "weighted_average"  # weighted_average / dempster_shafer / soft_voting
   alpha: 0.8  # DL模型权重（仅weighted_average模式）
 
 threat_intel_api:
-  # 外部威胁情报API地址（D:/毕设相关/api 提供的FastAPI服务）
-  # 启动该服务: cd D:/毕设相关/api && docker compose up -d
-  # 注入CIC-IDS-2018攻击者IP: python populate_threat_intel.py
-  url: "http://localhost:8000"  # 留空则使用本地JSON fallback
+  url: ""  # 服务器训练默认使用本地JSON fallback
 
 agent:
   mode: "rule"  # rule / llm
@@ -45,6 +45,6 @@ agent:
     max_tokens: 1024
 
 visualization:
-  output_dir: "results/figures"
+  output_dir: "/root/autodl-tmp/cc-bishe-full/results/figures"
   dpi: 150
   figsize: [10, 8]

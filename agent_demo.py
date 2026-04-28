@@ -26,7 +26,11 @@ def load_components(config_path: str, device: str = "cpu"):
 
     # 加载数据以获取特征信息
     print("加载数据集...")
-    loader = DataLoader(data_config["raw_dir"])
+    loader = DataLoader(
+        data_config["raw_dir"],
+        full_dataset=data_config.get("full_dataset", False),
+        exclude_patterns=data_config.get("exclude_patterns", []),
+    )
     data = loader.load(data_config.get("file_pattern", "*.csv"))
 
     engineer = FeatureEngineer()

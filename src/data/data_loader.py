@@ -1,25 +1,63 @@
 """数据加载模块 - 加载CIC-IDS-2018 CSV数据"""
 
-import os
+import fnmatch
 import glob
-import pandas as pd
+import os
+
 import numpy as np
+import pandas as pd
 
 
 class DataLoader:
     """加载CIC-IDS-2018处理后的CSV数据集"""
 
-    def __init__(self, raw_dir: str):
+    def __init__(
+        self,
+        raw_dir: str,
+        full_dataset: bool = False,
+        exclude_patterns: list[str] | None = None,
+    ):
         self.raw_dir = raw_dir
+        self.full_dataset = full_dataset
+        self.exclude_patterns = exclude_patterns or []
         self.label_col = "label"
+        self.loaded_files: list[str] = []
+
+    def list_csv_files(self, file_pattern: str = "*.csv") -> list[str]:
+        csv_files = sorted(glob.glob(os.path.join(self.raw_dir, file_pattern)))
+        csv_files = [f for f in csv_files if os.path.isfile(f)]
+
+        excluded = []
+        kept = []
+        for path in csv_files:
+            name = os.path.basename(path)
+            if self._should_exclude(name):
+                excluded.append(path)
+            else:
+                kept.append(path)
+
+        if self.full_dataset and excluded:
+            names = ", ".join(os.path.basename(f) for f in excluded)
+            print(f"全量模式已排除采样文件: {names}")
+
+        if self.full_dataset:
+            sampled = [f for f in kept if self._looks_sampled(os.path.basename(f))]
+            if sampled:
+                names = ", ".join(os.path.basename(f) for f in sampled)
+                raise ValueError(f"全量模式禁止使用采样CSV: {names}")
+
+        return kept
 
     def load(self, file_pattern: str = "*.csv") -> pd.DataFrame:
         """加载CSV文件，支持多文件合并"""
-        csv_files = sorted(glob.glob(os.path.join(self.raw_dir, file_pattern)))
+        csv_files = self.list_csv_files(file_pattern)
         if not csv_files:
             raise FileNotFoundError(
                 f"在 {self.raw_dir} 中未找到匹配 '{file_pattern}' 的CSV文件"
             )
+
+        self.loaded_files = csv_files
+        print(f"将加载CSV文件数: {len(csv_files)}")
 
         dfs = []
         for f in csv_files:
@@ -38,6 +76,15 @@ class DataLoader:
         data = self._clean_data(data)
 
         return data
+
+    def _should_exclude(self, file_name: str) -> bool:
+        lower_name = file_name.lower()
+        if self.full_dataset and self._looks_sampled(lower_name):
+            return True
+        return any(fnmatch.fnmatch(file_name, pattern) for pattern in self.exclude_patterns)
+
+    def _looks_sampled(self, file_name: str) -> bool:
+        return "sample" in file_name.lower() or "sampled" in file_name.lower()
 
     def _detect_label_col(self, data: pd.DataFrame) -> str:
         """自动检测标签列"""
